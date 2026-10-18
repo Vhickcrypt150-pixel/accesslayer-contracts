@@ -3198,6 +3198,40 @@ pub fn batch_buy_fee_collected_topics(
 }
 
 // ============================================================================
+// Feature: multi-buy across multiple creators with per-leg slippage
+// ============================================================================
+
+/// Event name emitted once when every leg of a `multi_buy` succeeds.
+pub const MULTI_BUY_COMPLETED_EVENT_NAME: Symbol = symbol_short!("multi_buy");
+
+/// Stable multi-buy-completed event payload.
+///
+/// Event shape:
+/// - topics: `(MULTI_BUY_COMPLETED_EVENT_NAME, buyer)`
+/// - data: `MultiBuyCompletedEvent`
+///
+/// Emitted exactly once per successful `multi_buy` call, after every leg has
+/// executed. A failed leg rolls back the whole transaction, so this event is
+/// never emitted for a partially executed multi-buy.
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[contracttype]
+pub struct MultiBuyCompletedEvent {
+    /// Address of the buyer performing the multi-buy.
+    pub buyer: Address,
+    /// Number of legs executed in this multi-buy.
+    pub leg_count: u32,
+    /// Sum of all per-leg gross costs (including fees).
+    pub total_cost: i128,
+    /// Ledger sequence number at the time of completion.
+    pub ledger: u32,
+}
+
+/// Shared multi-buy-completed event topics tuple.
+pub fn multi_buy_completed_topics(buyer: &Address) -> (Symbol, Address) {
+    (MULTI_BUY_COMPLETED_EVENT_NAME, buyer.clone())
+}
+
+// ============================================================================
 // Feature: creator reputation scoring
 // ============================================================================
 
