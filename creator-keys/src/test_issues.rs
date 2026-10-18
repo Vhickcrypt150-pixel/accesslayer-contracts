@@ -1358,4 +1358,184 @@ mod issue_tests {
         let result = client.try_migrate_curve(&non_admin, &2, &key_ids);
         assert_eq!(result, Err(Ok(ContractError::Unauthorized)));
     }
+
+    // =========================================================================
+    // Tests for multi_buy (#487)
+    // =========================================================================
+
+    fn make_leg(env: &Env, creator: Address, amount: u32, max_price: i128) -> crate::MultiBuyLeg {
+        crate::MultiBuyLeg {
+            creator,
+            amount,
+            max_price,
+        }
+    }
+
+    #[test]
+    fn test_multi_buy_three_legs_all_within_max_price() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register(CreatorKeysContract, ());
+        let client = CreatorKeysContractClient::new(&env, &contract_id);
+        let admin = Address::generate(&env);
+        client.set_protocol_admin(&admin, &admin);
+        client.set_fee_config(&admin, &9_000, &1_000);
+        client.set_key_price(&admin, &100);
+
+        let c1 = register_creator(&env, &client, None);
+        let c2 = register_creator(&env, &client, None);
+        let c3 = register_creator(&env, &client, None);
+        let buyer = Address::generate(&env);
+
+        let legs = soroban_sdk::Vec::from_array(
+            &env,
+            [
+                make_leg(&env, c1.clone(), 2u32, 10_000i128),
+                make_leg(&env, c2.clone(), 3u32, 10_000i128),
+                make_leg(&env, c3.clone(), 1u32, 10_000i128),
+            ],
+        );
+
+        let deadline = env.ledger().sequence() + 100;
+        let results = client.multi_buy(&buyer, &legs, &deadline);
+
+        assert_eq!(results.len(), 3);
+        assert_eq!(client.get_total_key_supply(&c1), 2u32);
+        assert_eq!(client.get_total_key_supply(&c2), 3u32);
+        assert_eq!(client.get_total_key_supply(&c3), 1u32);
+    }
+
+    #[test]
+    fn test_multi_buy_rolls_back_when_second_leg_exceeds_max_price() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register(CreatorKeysContract, ());
+        let client = CreatorKeysContractClient::new(&env, &contract_id);
+        let admin = Address::generate(&env);
+        client.set_protocol_admin(&admin, &admin);
+        client.set_fee_config(&admin, &9_000, &1_000);
+        client.set_key_price(&admin, &100);
+
+        let c1 = register_creator(&env, &client, None);
+        let c2 = register_creator(&env, &client, None);
+        let c3 = register_creator(&env, &client, None);
+        let buyer = Address::generate(&env);
+
+        let legs = soroban_sdk::Vec::from_array(
+            &env,
+            [
+                make_leg(&env, c1.clone(), 1u32, 10_000i128),
+                make_leg(&env, c2.clone(), 1u32, 1i128),
+                make_leg(&env, c3.clone(), 1u32, 10_000i128),
+            ],
+        );
+
+        let deadline = env.ledger().sequence() + 100;
+        let result = client.try_multi_buy(&buyer, &legs, &deadline);
+        assert!(result.is_err(), "multi_buy should revert when a leg exceeds max_price");
+
+        assert_eq!(client.get_total_key_supply(&c1), 0u32);
+        assert_eq!(client.get_total_key_supply(&c2), 0u32);
+        assert_eq!(client.get_total_key_supply(&c3), 0u32);
+    }
+
+    #[test]
+    fn test_multi_buy_reverts_on_duplicate_creator() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register(CreatorKeysContract, ());
+        let client = CreatorKeysContractClient::new(&env, &contract_id);
+        let admin = Address::generate(&env);
+        client.set_protocol_admin(&admin, &admin);
+        client.set_fee_config(&admin, &9_000, &1_000);
+        client.set_key_price(&admin, &100);
+
+        let c1 = register_creator(&env, &client, None);
+        let buyer = Address::generate(&env);
+
+        let legs = soroban_sdk::Vec::from_array(
+            &env,
+            [
+                make_leg(&env, c1.clone(), 1u32, 10_000i128),
+                make_leg(&env, c1.clone(), 1u32, 10_000i128),
+            ],
+        );
+
+        let deadline = env.ledger().sequence() + 100;
+        let result = client.try_multi_buy(&buyer, &legs, &deadline);
+        assert_eq!(result, Err(Ok(ContractError::DuplicateCreator)));
+    }
+
+    #[test]
+    fn test_multi_buy_reverts_on_too_many_legs() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register(CreatorKeysContract, ());
+        let client = CreatorKeysContractClient::new(&env, &contract_id);
+        let admin = Address::generate(&env);
+        client.set_protocol_admin(&admin, &admin);
+        client.set_fee_config(&admin, &9_000, &1_000);
+        client.set_key_price(&admin, &100);
+
+        let buyer = Address::generate(&env);
+        let mut legs = soroban_sdk::Vec::new(&env);
+        for _ in 0..11 {
+            let c = register_creator(&env, &client, None);
+            legs.push_back(make_leg(&env, c, 1u32, 10_000i128));
+        }
+
+        let deadline = env.ledger().sequence() + 100;
+        let result = client.try_multi_buy(&buyer, &legs, &deadline);
+        assert_eq!(result, Err(Ok(ContractError::TooManyLegs)));
+    }
+
+    #[test]
+    fn test_multi_buy_reverts_on_deadline_passed() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register(CreatorKeysContract, ());
+        let client = CreatorKeysContractClient::new(&env, &contract_id);
+        let admin = Address::generate(&env);
+        client.set_protocol_admin(&admin, &admin);
+        client.set_fee_config(&admin, &9_000, &1_000);
+        client.set_key_price(&admin, &100);
+
+        let c1 = register_creator(&env, &client, None);
+        let buyer = Address::generate(&env);
+
+        let legs = soroban_sdk::Vec::from_array(&env, [make_leg(&env, c1, 1u32, 10_000i128)]);
+
+        let mut l = env.ledger().get();
+        l.sequence_number = 1000;
+        env.ledger().set(l);
+
+        let result = client.try_multi_buy(&buyer, &legs, &999u32);
+        assert_eq!(result, Err(Ok(ContractError::DeadlinePassed)));
+    }
+
+    #[test]
+    fn test_multi_buy_reverts_on_insufficient_funds() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register(CreatorKeysContract, ());
+        let client = CreatorKeysContractClient::new(&env, &contract_id);
+        let admin = Address::generate(&env);
+        client.set_protocol_admin(&admin, &admin);
+        client.set_fee_config(&admin, &9_000, &1_000);
+        client.set_key_price(&admin, &100);
+
+        let c1 = register_creator(&env, &client, None);
+        let buyer = Address::generate(&env);
+
+        // Worst-case cost = amount * max_price = 1 * i128::MAX, unaffordable.
+        let legs = soroban_sdk::Vec::from_array(
+            &env,
+            [make_leg(&env, c1.clone(), 1u32, i128::MAX)],
+        );
+
+        let deadline = env.ledger().sequence() + 100;
+        let result = client.try_multi_buy(&buyer, &legs, &deadline);
+        assert_eq!(result, Err(Ok(ContractError::InsufficientFunds)));
+        assert_eq!(client.get_total_key_supply(&c1), 0u32);
+    }
 }
